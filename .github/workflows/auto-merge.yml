@@ -1,0 +1,94 @@
+name: Auto Merge PR
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  enable-automerge:
+    # Only act on PRs that explicitly opt in with the `automerge` label.
+    if: contains(github.event.pull_request.labels.*.name, 'automerge') && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge when approvals are present
+        uses: actions/github-script@60a0bd8c5d5f0a8a28e34ddfae3029e9842d2c4c # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            // Check that there are no active "changes requested" reviews and at least one approval.
+            const reviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              {
+                owner,
+                repo,
+                pull_number,
+                per_page: 100,
+              }
+            );
+
+            const latestByUser = new Map();
+            for (const review of reviews) {
+              latestByUser.set(review.user.login, review.state);
+            }
+
+            let approvals = 0;
+            let changesRequested = false;
+            for (const state of latestByUser.values()) {
+              if (state === 'APPROVED') approvals += 1;
+              if (state === 'CHANGES_REQUESTED') changesRequested = true;
+            }
+
+            if (changesRequested || approvals < 1) {
+              core.info('Skipping auto-merge: needs at least one active approval and no active changes requested.');
+              return;
+            }
+
+            const prNodeId = context.payload.pull_request.node_id;
+
+            try {
+              const result = await github.graphql(
+                `mutation($pullRequestId: ID!) {
+                  enablePullRequestAutoMerge(input: {
+                    pullRequestId: $pullRequestId,
+                    mergeMethod: SQUASH
+                  }) {
+                    pullRequest {
+                      number
+                      autoMergeRequest {
+                        enabledAt
+                      }
+                    }
+                  }
+                }`,
+                { pullRequestId: prNodeId }
+              );
+
+              core.info(`Auto-merge enabled for PR #${pull_number}.`);
+            } catch (error) {
+              const message = (error && error.message) ? error.message : String(error);
+
+              // Treat "already enabled" as a successful no-op.
+              if (message.toLowerCase().includes('already enabled') && message.toLowerCase().includes('auto-merge')) {
+                core.info(`Auto-merge is already enabled for PR #${pull_number}; treating as success.`);
+                return;
+              }
+
+              // If auto-merge is disabled for the repository, log and exit without failing repeatedly.
+              if (message.toLowerCase().includes('auto-merge is disabled') || message.toLowerCase().includes('auto merge is disabled')) {
+                core.warning(`Auto-merge is disabled at the repository level; cannot enable auto-merge for PR #${pull_number}.`);
+                return;
+              }
+
+              core.error(`Failed to enable auto-merge for PR #${pull_number}: ${message}`);
+              throw error;
+            }
