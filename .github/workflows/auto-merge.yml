@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Enable auto-merge when approvals are present
-        uses: actions/github-script@v7
+        uses: actions/github-script@60a0bd8c5d5f0a8a28e34ddfae3029e9842d2c4c # v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
