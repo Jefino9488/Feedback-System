@@ -26,12 +26,15 @@ jobs:
             const pull_number = context.payload.pull_request.number;
 
             // Check that there are no active "changes requested" reviews and at least one approval.
-            const { data: reviews } = await github.rest.pulls.listReviews({
-              owner,
-              repo,
-              pull_number,
-              per_page: 100,
-            });
+            const reviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              {
+                owner,
+                repo,
+                pull_number,
+                per_page: 100,
+              }
+            );
 
             const latestByUser = new Map();
             for (const review of reviews) {
