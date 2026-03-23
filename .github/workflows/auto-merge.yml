@@ -54,21 +54,41 @@ jobs:
             }
 
             const prNodeId = context.payload.pull_request.node_id;
-            await github.graphql(
-              `mutation($pullRequestId: ID!) {
-                enablePullRequestAutoMerge(input: {
-                  pullRequestId: $pullRequestId,
-                  mergeMethod: SQUASH
-                }) {
-                  pullRequest {
-                    number
-                    autoMergeRequest {
-                      enabledAt
+
+            try {
+              const result = await github.graphql(
+                `mutation($pullRequestId: ID!) {
+                  enablePullRequestAutoMerge(input: {
+                    pullRequestId: $pullRequestId,
+                    mergeMethod: SQUASH
+                  }) {
+                    pullRequest {
+                      number
+                      autoMergeRequest {
+                        enabledAt
+                      }
                     }
                   }
-                }
-              }`,
-              { pullRequestId: prNodeId }
-            );
+                }`,
+                { pullRequestId: prNodeId }
+              );
 
-            core.info(`Auto-merge enabled for PR #${pull_number}.`);
+              core.info(`Auto-merge enabled for PR #${pull_number}.`);
+            } catch (error) {
+              const message = (error && error.message) ? error.message : String(error);
+
+              // Treat "already enabled" as a successful no-op.
+              if (message.toLowerCase().includes('already enabled') && message.toLowerCase().includes('auto-merge')) {
+                core.info(`Auto-merge is already enabled for PR #${pull_number}; treating as success.`);
+                return;
+              }
+
+              // If auto-merge is disabled for the repository, log and exit without failing repeatedly.
+              if (message.toLowerCase().includes('auto-merge is disabled') || message.toLowerCase().includes('auto merge is disabled')) {
+                core.warning(`Auto-merge is disabled at the repository level; cannot enable auto-merge for PR #${pull_number}.`);
+                return;
+              }
+
+              core.error(`Failed to enable auto-merge for PR #${pull_number}: ${message}`);
+              throw error;
+            }
